@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Centre Remix — Harbour Place leasing board (SAMPLE)</title>
+  <meta name="description" content="Shared live leasing board for Harbour Place, a fictional NSW shopping centre. Humans and WebMCP agents remix tenancies on the same page.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect fill='%231c2d3f' width='64' height='64'/%3E%3Crect x='8' y='8' width='48' height='48' fill='none' stroke='%23b08d4a' stroke-width='3'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-size='18' fill='%23f3ead8' font-family='serif'%3EHP%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <div id="webmcp-banner" class="webmcp-banner" role="status">
+    <div>
+      <strong>WebMCP not detected</strong>
+      <div>
+        This page still works as a full leasing board. To let an agent call the ten tools,
+        open it in the ChatGPT desktop in-app browser, or in Chrome 149+ with
+        <code>chrome://flags/#enable-webmcp-testing</code> enabled, then reload.
+        Top-level page only. No iframes.
+      </div>
+    </div>
+  </div>
+
+  <header class="app-header">
+    <div class="brand">
+      <h1>Centre Remix</h1>
+      <span class="mark">Leasing board</span>
+    </div>
+    <div class="centre-title">
+      <div class="name">Harbour Place</div>
+      <div class="where">Millers Reach · NSW · SAMPLE DATA</div>
+    </div>
+    <div class="header-stats">
+      <div class="stat"><b id="stat-occ">99.2%</b><span>Occupancy</span></div>
+      <div class="stat"><b id="stat-gla">7,977 m²</b><span>Let GLA</span></div>
+      <div class="stat"><b id="stat-shops">24</b><span>Shops on board</span></div>
+      <div class="stat"><b id="stat-pending">0</b><span>Open proposals</span></div>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Leasing controls">
+      <section class="panel" id="panel-mix">
+        <h2>Category mix</h2>
+        <div class="panel-body" id="mix-body"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Board filters</h2>
+        <div class="panel-body">
+          <div class="field">
+            <label for="filter-category">Category</label>
+            <select id="filter-category"></select>
+          </div>
+          <div class="row-2">
+            <div class="field">
+              <label for="filter-expiry">Expiry window</label>
+              <select id="filter-expiry">
+                <option value="0">All terms</option>
+                <option value="3">3 months</option>
+                <option value="6">6 months</option>
+                <option value="12">12 months</option>
+                <option value="18">18 months</option>
+                <option value="24">24 months</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="filter-rent">Rent band</label>
+              <select id="filter-rent">
+                <option value="">All bands</option>
+                <option value="low">Low ≤ $800/m²</option>
+                <option value="mid">Mid $801–$1500</option>
+                <option value="high">High &gt; $1500</option>
+              </select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-ghost" id="btn-clear-filters">Clear filters</button>
+            <button type="button" class="btn btn-ghost" id="btn-reset">Reset sample</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Shop inspector</h2>
+        <div class="panel-body" id="inspector">
+          <p class="inspector-empty">Select a shop on the plan, or ask an agent to <code>get_shop</code> / <code>focus_shop</code>.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Remix proposals</h2>
+        <div class="panel-body" id="proposals-body">
+          <p class="inspector-empty">No uncommitted overlays. Propose a remix from the inspector or via <code>propose_remix</code>.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Outreach draft</h2>
+        <div class="panel-body">
+          <p class="inspector-empty" id="draft-empty">Does not send email. Drafts stay on this page.</p>
+          <div id="draft-body" hidden>
+            <div class="kv" style="margin-bottom:8px">
+              <dt>To</dt><dd id="draft-audience"></dd>
+              <dt>Shop</dt><dd id="draft-shop"></dd>
+            </div>
+            <div class="draft-sheet" id="draft-text"></div>
+            <div class="btn-row">
+              <button type="button" class="btn btn-ghost" id="btn-copy-draft">Copy draft</button>
+              <button type="button" class="btn btn-ghost" id="btn-clear-draft">Clear</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Activity log</h2>
+        <div class="panel-body" style="padding:0">
+          <div class="log" id="activity-log" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Simulate agent</h2>
+        <div class="panel-body">
+          <p class="inspector-empty">Runs the same functions the WebMCP tools call. Use this when ChatGPT is not in the tab.</p>
+          <div class="field">
+            <label for="sim-tool">Tool</label>
+            <select id="sim-tool"></select>
+          </div>
+          <div id="sim-fields"></div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-brass" id="btn-sim-run">Run tool</button>
+          </div>
+          <pre class="sim-result" id="sim-result">Ready.</pre>
+        </div>
+      </section>
+    </aside>
+
+    <section class="board" aria-label="Harbour Place floor plan">
+      <div class="sheet">
+        <div class="watermark">SAMPLE</div>
+        <div class="title-block">
+          <div>
+            <h2>Harbour Place · simplified floor plan</h2>
+            <div style="font-family:var(--font-cond);letter-spacing:.18em;text-transform:uppercase;font-size:11px;color:var(--brass-dim)">
+              Quay Lane, Millers Reach NSW · drawing HP-LB-01
+            </div>
+          </div>
+          <div class="meta">
+            REV SAMPLE<br>
+            AS AT 30 AUG 2026<br>
+            24 SHOPS · FICTIONAL TENANTS
+          </div>
+        </div>
+        <div class="north"><span class="compass" aria-hidden="true">▲</span> Harbour · North</div>
+        <div class="plan" id="plan"></div>
+        <div class="legend" id="legend"></div>
+        <p class="footer-note">
+          SAMPLE DATA only. Rents, GLA, expiries and productivity bands are invented for Harbour Place.
+          They are not comps and do not describe a real centre.
+        </p>
+      </div>
+    </section>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

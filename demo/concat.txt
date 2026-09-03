@@ -1,0 +1,9 @@
+file 'title.png'
+duration 6
+file 'board-full-slide.png'
+duration 34
+file 'inspector-hp09-slide.png'
+duration 30
+file 'end.png'
+duration 12
+file 'end.png'
