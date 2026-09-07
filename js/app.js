@@ -25,6 +25,7 @@
   let undoStack = [];
   let activity = [];
   let outreach = null;
+  let callDraft = null;
 
   function clone(v) {
     return JSON.parse(JSON.stringify(v));
@@ -112,6 +113,7 @@
     const pending = pendingFor(shop.shop_id);
     return Object.assign(summarize(shop), {
       notes: shop.notes,
+      last_call: shop.last_call || null,
       incoming_overlay: pending ? {
         proposal_id: pending.id,
         replacement_category: pending.replacement_category,
@@ -502,6 +504,179 @@
     };
   }
 
+
+  function clientCallFixture(payload) {
+    const shopId = payload.shop_id || "unknown";
+    const goal = (payload.goal || "").trim();
+    const structured_result = {
+      interested: "unknown",
+      preferred_window: "Weekday mornings (SAMPLE)",
+      notes: "Client-side dry-run fixture for " + shopId + ". No CALL-E network call. Goal: " + (goal || "(none)") + ".",
+      call_outcome: "dry_run_completed"
+    };
+    return {
+      ok: true,
+      mode: "dry_run",
+      status: "completed",
+      dry_run: true,
+      fixture: true,
+      fixture_source: "client",
+      shop_id: shopId,
+      phone: payload.phone,
+      goal: goal,
+      provider: "fixture",
+      structured_result: structured_result,
+      result: structured_result,
+      summary: "Dry-run completed for " + shopId + " — tenant interest unknown; preferred SAMPLE weekday mornings.",
+      transcript: "[fixture] Agent: Calling about Harbour Place " + shopId + ". " + goal + "\n[fixture] Tenant: Thanks — mornings work best."
+    };
+  }
+
+  async function requestPlaceCall(payload) {
+    try {
+      const res = await fetch("/.netlify/functions/place-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.status === 404) {
+        const fix = clientCallFixture(payload);
+        fix.fixture_source = "client_fallback_404";
+        return fix;
+      }
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        if (!res.ok) {
+          const fix = clientCallFixture(payload);
+          fix.fixture_source = "client_fallback_bad_body";
+          fix.fallback_reason = "HTTP " + res.status;
+          return fix;
+        }
+        throw parseErr;
+      }
+      return data;
+    } catch (err) {
+      const fix = clientCallFixture(payload);
+      fix.fixture_source = "client_fallback";
+      fix.fallback_reason = String(err && err.message ? err.message : err);
+      return fix;
+    }
+  }
+
+  async function place_tenant_call(input, source) {
+    input = input || {};
+    source = source || "human";
+    const shop = shopById(input.shop_id);
+    if (!shop) return { ok: false, error: "Unknown shop_id", summary: "not found" };
+    const phone = String(input.phone || "").trim();
+    const goal = String(input.goal || "").trim();
+    if (!phone) return { ok: false, error: "phone is required (E.164 preferred)", summary: "need phone" };
+    if (!goal) return { ok: false, error: "goal is required", summary: "need goal" };
+    const dryRun = input.dry_run !== false;
+
+    callDraft = {
+      shop_id: shop.shop_id,
+      phone: phone,
+      goal: goal,
+      dry_run: dryRun,
+      status: "preview",
+      result: null
+    };
+    selectedId = shop.shop_id;
+
+    const confirmed = input.confirm === true || (source === "sim" && dryRun);
+    if (!confirmed) {
+      render();
+      return {
+        ok: true,
+        needs_confirm: true,
+        dry_run: dryRun,
+        shop_id: shop.shop_id,
+        phone: phone,
+        goal: goal,
+        summary: "Preview staged · Confirm & call in inspector (never auto-dials)"
+      };
+    }
+
+    if (!dryRun && source === "sim") {
+      callDraft.status = "blocked";
+      render();
+      return {
+        ok: false,
+        error: "Simulate agent only supports dry_run (refuses live dial)",
+        summary: "refused live dial from sim"
+      };
+    }
+
+    callDraft.status = dryRun ? "dry_running" : "calling";
+    render();
+
+    const payload = {
+      shop_id: shop.shop_id,
+      phone: phone,
+      goal: goal,
+      confirm: true,
+      dry_run: dryRun
+    };
+
+    let response;
+    if (dryRun) {
+      // Try Netlify function; on 404/offline use client fixture (never dials CALL-E).
+      response = await requestPlaceCall(payload);
+      if (!response || response.ok === false) {
+        response = clientCallFixture(payload);
+      }
+    } else {
+      response = await requestPlaceCall(payload);
+    }
+
+    if (!response || response.ok === false) {
+      callDraft.status = "error";
+      callDraft.result = response;
+      render();
+      return {
+        ok: false,
+        error: (response && response.error) || "place-call failed",
+        summary: (response && response.summary) || "call failed",
+        response: response
+      };
+    }
+
+    const structured = response.structured_result || response.result || {};
+    shop.last_call = {
+      at: new Date().toISOString(),
+      phone: phone,
+      goal: goal,
+      mode: response.mode || (dryRun ? "dry_run" : "live"),
+      status: response.status || "completed",
+      dry_run: !!response.dry_run || dryRun,
+      fixture: !!response.fixture,
+      provider: response.provider || (response.fixture ? "fixture" : "call-e"),
+      interested: structured.interested || "unknown",
+      preferred_window: structured.preferred_window || "",
+      notes: structured.notes || "",
+      call_outcome: structured.call_outcome || "unknown",
+      summary: response.summary || "",
+      transcript: response.transcript || "",
+      structured_result: structured
+    };
+    callDraft.status = "done";
+    callDraft.result = shop.last_call;
+    render();
+    return {
+      ok: true,
+      dry_run: shop.last_call.dry_run,
+      fixture: shop.last_call.fixture,
+      shop_id: shop.shop_id,
+      last_call: shop.last_call,
+      shop: publicShop(shop),
+      summary: (shop.last_call.dry_run ? "Dry-run fixture · " : "CALL-E · ") +
+        shop.shop_id + " · interested=" + shop.last_call.interested
+    };
+  }
+
   const TOOL_FNS = {
     list_tenants: list_tenants,
     get_shop: get_shop,
@@ -510,6 +685,7 @@
     apply_remix: apply_remix,
     reject_remix: reject_remix,
     draft_outreach: draft_outreach,
+    place_tenant_call: place_tenant_call,
     set_expiry_window: set_expiry_window,
     summarise_mix: summarise_mix,
     undo_last: undo_last
@@ -618,6 +794,23 @@
       }
     },
     {
+      name: "place_tenant_call",
+      title: "Place tenant call",
+      description: "Prepare or place a leasing outreach call via CALL-E. Defaults to dry_run true (fixture only, no network dial). Never auto-dials: agent/tool stages a preview; human must Confirm & call (confirm:true) before POST. Simulate dry-run writes a fixture onto the shop.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          shop_id: { type: "string", enum: SHOP_IDS, description: "Shop code HP-01 to HP-24." },
+          phone: { type: "string", description: "E.164 phone for the call target (SAMPLE / demo numbers only)." },
+          goal: { type: "string", description: "What the call should achieve (leasing interest, preferred window)." },
+          dry_run: { type: "boolean", description: "Default true. When true, return fixture only — never dial CALL-E." },
+          confirm: { type: "boolean", description: "Must be true to place (or dry-run) the call. Without confirm, tool only stages a preview." }
+        },
+        required: ["shop_id", "phone", "goal"],
+        additionalProperties: false
+      }
+    },
+    {
       name: "set_expiry_window",
       title: "Set expiry window",
       description: "Visually filter the plan to leases expiring within N months from 30 Aug 2026. Pass 0 to clear.",
@@ -645,7 +838,7 @@
     }
   ];
 
-  function dispatch(name, input, source) {
+  async function dispatch(name, input, source) {
     const fn = TOOL_FNS[name];
     if (!fn) {
       const err = { ok: false, error: "Unknown tool", summary: name };
@@ -654,7 +847,7 @@
     }
     let result;
     try {
-      result = fn(input || {});
+      result = await Promise.resolve(fn(input || {}, source));
     } catch (err) {
       result = { ok: false, error: String(err && err.message ? err.message : err), summary: "exception" };
     }
@@ -757,6 +950,13 @@
         b.textContent = "Remixed";
         el.appendChild(b);
       }
+      if (shop.last_call) {
+        const c = document.createElement("span");
+        c.className = "badge" + (shop.last_call.dry_run ? "" : " applied");
+        c.textContent = shop.last_call.dry_run ? "Call dry-run" : "Called";
+        c.title = "interested=" + shop.last_call.interested;
+        el.appendChild(c);
+      }
 
       el.addEventListener("click", function () {
         selectedId = shop.shop_id;
@@ -837,6 +1037,7 @@
       "<dt>Productivity</dt><dd><span class='prod prod-" + shop.productivity + "'>" + shop.productivity + "</span> " +
       escapeHtml((catalogue.productivity_bands || {})[shop.productivity] || "") + "</dd>" +
       "<dt>Notes</dt><dd style='white-space:normal;font-family:var(--font-ui)'>" + escapeHtml(shop.notes || "") + "</dd>" +
+      (shop.last_call ? "<dt>Last call</dt><dd style='white-space:normal;font-family:var(--font-ui)'>" + escapeHtml(shop.last_call.call_outcome + " · interested=" + shop.last_call.interested + (shop.last_call.dry_run ? " · dry-run" : "")) + "</dd>" : "") +
       "</dl>" +
       (pending ? "<p class='proposal' style='margin-top:10px'>Overlay " + pending.id + " proposes " +
         catLabel(pending.replacement_category) + ". Accept or reject in Remix proposals.</p>" : "") +
@@ -851,7 +1052,36 @@
       '<div class="row-2"><div class="field"><label for="insp-aud">Audience</label>' +
       '<select id="insp-aud"><option value="landlord">Landlord</option><option value="tenant">Tenant</option></select></div>' +
       '<div class="field"><label for="insp-goal">Goal</label><input id="insp-goal" placeholder="Open expiry talks"></div></div>' +
-      '<div class="btn-row"><button type="button" class="btn btn-ghost" id="insp-draft">Draft on page</button></div>' +
+            '<div class="btn-row"><button type="button" class="btn btn-ghost" id="insp-draft">Draft on page</button></div>' +
+      "</div>" +
+      '<div class="call-panel" style="margin-top:10px;border-top:1px dashed var(--rule);padding-top:8px">' +
+      "<strong style='font-family:var(--font-cond);letter-spacing:.12em;text-transform:uppercase;font-size:11px'>CALL-E tenant call</strong>" +
+      "<p class='inspector-empty' style='margin:4px 0 8px'>Never auto-dials. Confirm &amp; call required. Dry-run default = fixture only.</p>" +
+      '<div class="field"><label for="insp-phone">Phone</label>' +
+      '<input id="insp-phone" type="tel" placeholder="+61…" value="' +
+      escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.phone) || (shop.last_call && shop.last_call.phone) || "") +
+      '"></div>' +
+      '<div class="field"><label for="insp-call-goal">Goal</label>' +
+      '<input id="insp-call-goal" placeholder="Confirm interest / preferred window" value="' +
+      escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.goal) || (shop.last_call && shop.last_call.goal) || "") +
+      '"></div>' +
+      '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row">' +
+      '<input id="insp-dry-run" type="checkbox"' +
+      ((callDraft && callDraft.shop_id === shop.shop_id) ? (callDraft.dry_run !== false ? " checked" : "") : " checked") +
+      '> <span>dry_run (fixture; no live dial)</span></label>' +
+      '<div class="btn-row">' +
+      '<button type="button" class="btn btn-brass" id="insp-confirm-call">Confirm &amp; call</button>' +
+      '</div>' +
+      '<p class="call-status" id="insp-call-status" style="margin:8px 0 0;font-size:12px;font-family:var(--font-mono)">' +
+      escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.status) || (shop.last_call ? "last result on shop" : "idle")) +
+      "</p>" +
+      (shop.last_call ? '<article class="proposal call-result" style="margin-top:8px">' +
+        '<div class="pid">last_call' + (shop.last_call.dry_run ? " · dry-run" : "") + "</div>" +
+        "<div>interested: <strong>" + escapeHtml(shop.last_call.interested) + "</strong></div>" +
+        "<div>preferred_window: " + escapeHtml(shop.last_call.preferred_window || "—") + "</div>" +
+        "<div>outcome: " + escapeHtml(shop.last_call.call_outcome || "") + "</div>" +
+        "<div style='margin-top:4px;color:var(--ink-soft)'>" + escapeHtml(shop.last_call.notes || "") + "</div>" +
+        "</article>" : "") +
       "</div>";
 
     document.getElementById("insp-propose").addEventListener("click", function () {
@@ -868,6 +1098,22 @@
         goal: document.getElementById("insp-goal").value || "Open a remix / expiry conversation"
       }, "human");
     });
+    const confirmBtn = document.getElementById("insp-confirm-call");
+    if (confirmBtn) {
+      confirmBtn.addEventListener("click", function () {
+        const statusEl = document.getElementById("insp-call-status");
+        if (statusEl) statusEl.textContent = "confirming…";
+        dispatch("place_tenant_call", {
+          shop_id: shop.shop_id,
+          phone: document.getElementById("insp-phone").value,
+          goal: document.getElementById("insp-call-goal").value || "Confirm leasing interest and preferred window",
+          dry_run: document.getElementById("insp-dry-run").checked,
+          confirm: true
+        }, "human").then(function (result) {
+          if (statusEl) statusEl.textContent = result && result.summary ? result.summary : "done";
+        });
+      });
+    }
   }
 
   function renderProposals() {
@@ -1006,6 +1252,12 @@
         return '<div class="field"><label for="sim-' + k + '">' + k + (req ? " *" : "") +
           "</label><select id='sim-" + k + "'>" + opts.join("") + "</select></div>";
       }
+      if (spec.type === "boolean") {
+        return '<div class="field"><label for="sim-' + k + '">' + k + (req ? " *" : "") +
+          "</label><select id='sim-" + k + "'>" +
+          '<option value="true" selected>true</option>' +
+          '<option value="false">false</option></select></div>';
+      }
       const type = spec.type === "integer" || spec.type === "number" ? "number" : "text";
       return '<div class="field"><label for="sim-' + k + '">' + k + (req ? " *" : "") +
         "</label><input id='sim-" + k + "' type='" + type + "' " +
@@ -1027,10 +1279,13 @@
       if (v === "") return;
       if (props[k].type === "integer") v = parseInt(v, 10);
       if (props[k].type === "number") v = Number(v);
+      if (props[k].type === "boolean") v = v === "true";
       input[k] = v;
     });
-    const result = dispatch(name, input, "sim");
-    document.getElementById("sim-result").textContent = JSON.stringify(result, null, 2);
+    document.getElementById("sim-result").textContent = "Running…";
+    Promise.resolve(dispatch(name, input, "sim")).then(function (result) {
+      document.getElementById("sim-result").textContent = JSON.stringify(result, null, 2);
+    });
   }
 
   /* ---------- WebMCP ---------- */
@@ -1045,7 +1300,7 @@
     }
     banner.hidden = false;
     banner.className = "webmcp-banner is-live";
-    banner.innerHTML = "<div><strong>WebMCP live</strong><div>10 tools registered on this top-level page. Agent and human share the same Harbour Place board.</div></div>";
+    banner.innerHTML = "<div><strong>WebMCP live</strong><div>11 tools registered on this top-level page. Agent and human share the same Harbour Place board.</div></div>";
     document.body.classList.add("has-banner");
 
     for (let i = 0; i < TOOL_DEFS.length; i++) {
@@ -1056,7 +1311,7 @@
         description: tool.description,
         inputSchema: tool.inputSchema,
         execute: async function (args) {
-          const result = dispatch(tool.name, args || {}, "agent");
+          const result = await dispatch(tool.name, args || {}, "agent");
           return envelopeResult(result);
         }
       };
@@ -1067,7 +1322,7 @@
         logCall("registerTool", { name: tool.name }, { ok: false, error: String(err), summary: "register failed" }, "human");
       }
     }
-    logCall("registerTool", { count: TOOL_DEFS.length }, { ok: true, summary: "10 tools registered" }, "human");
+    logCall("registerTool", { count: TOOL_DEFS.length }, { ok: true, summary: "11 tools registered" }, "human");
   }
 
   /* ---------- boot ---------- */
@@ -1135,6 +1390,7 @@
     proposalSeq = 1;
     undoStack = [];
     outreach = null;
+    callDraft = null;
     syncFilterControls();
     render();
     logCall("reset_sample", {}, { ok: true, summary: "Board restored to SAMPLE" }, "human");
