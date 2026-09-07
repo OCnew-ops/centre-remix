@@ -12,7 +12,7 @@ Copyright (c) 2026 Joseph Kalk. MIT License.
 
 WebMCP lets the page register real actions with `document.modelContext.registerTool`. The agent does not get a chatbot bolted onto a brochure. It gets the same board the human is looking at: filter the tenancy schedule, highlight a shop on the plan, drop an uncommitted remix overlay, draft a note that never leaves the page.
 
-Tools run in this tab. The board itself needs no login. Optional CALL-E dry-run uses a Netlify Function; without it the client fixture still works offline. If the human rejects a proposal, it never hits the sitting tenant.
+Tools run in this tab. The board itself needs no login. CALL-E outreach on the public site is **honestly fake-only** (fixture via Netlify Function or client fallback). The public function never dials. If the human rejects a proposal, it never hits the sitting tenant.
 
 ## Humans vs agents
 
@@ -23,7 +23,7 @@ Tools run in this tab. The board itself needs no login. Optional CALL-E dry-run 
 | Mix | Category bars and gap notes | `summarise_mix` |
 | Remix | Propose from the inspector, Accept or Reject on the overlay | `propose_remix`, `apply_remix`, `reject_remix` |
 | Letters | Draft outreach panel (copy only) | `draft_outreach` (does not send email) |
-| Tenant call | Confirm UI in inspector (dry-run default) | `place_tenant_call` (never auto-dials) |
+| Tenant call | Confirm UI writes a fixture only | `place_tenant_call` (honestly fake-only; never dials) |
 | Undo | Undo last applied | `undo_last` |
 
 The Simulate agent panel in the sidebar calls the same JavaScript functions the WebMCP tools call, so a judge can demo the product without ChatGPT.
@@ -57,7 +57,7 @@ Eleven tools, snake_case names, narrow JSON Schema, `additionalProperties: false
 | `apply_remix` | Commit by `proposal_id`. |
 | `reject_remix` | Drop overlay by `proposal_id`. |
 | `draft_outreach` | On-page letter for `landlord` or `tenant`. Never sends. |
-| `place_tenant_call` | Stage or dry-run a CALL-E leasing call. Default dry_run true. Never auto-dials; human Confirm and call. |
+| `place_tenant_call` | Stage an honestly fake-only CALL-E-shaped fixture. Confirm gates the fixture write only — public demo never dials. SAMPLE phone `+15550100100`. |
 | `set_expiry_window` | Visual filter by months (0 clears). |
 | `summarise_mix` | Mix, expiries, gaps. `readOnlyHint`. |
 | `undo_last` | Revert the last applied remix. |
@@ -94,7 +94,7 @@ You should see the green **WebMCP live** banner and eleven registered tools.
 6. Click **Undo last applied**. Confirm the previous tenant returns and the overlay is pending again.
 7. In **Simulate agent**, run `summarise_mix`, then `set_expiry_window` with `months` set to 6, then `list_tenants` with `category` set to fashion. Confirm the plan dims and the activity log records `sim` rows.
 8. Run `draft_outreach` for HP-09, audience `landlord`. Confirm a letter appears on the page and nothing is posted anywhere.
-9. In **Simulate agent**, run `place_tenant_call` for HP-09 with a SAMPLE phone and goal (leave dry_run true). Confirm a fixture last_call on the shop and an activity log row, with no live dial.
+9. In **Simulate agent**, run `place_tenant_call` for HP-09 with SAMPLE phone `+15550100100` and a short goal. Confirm a fixture last_call (masked phone) on the shop and an activity log row. Public demo never dials.
 10. In a WebMCP-capable browser, confirm the banner turns live and an agent can call the same eleven tools against the live UI.
 
 ## Five example agent prompts
@@ -106,22 +106,24 @@ You should see the green **WebMCP live** banner and eleven registered tools.
 5. "Summarise the category mix, set the expiry window to 12 months, and list F&B shops in the high rent band."
 
 
-## CALL-E (dry-run wrap)
+## CALL-E (honestly fake-only / dry-run fixtures)
 
-Outbound tenant calls go through a thin Netlify Function wrap around CALL-E. **Dry-run is the default.** Nothing dials unless a human confirms and `dry_run` is explicitly `false` with the API key set on Netlify.
+The **public** Netlify demo is **honestly fake-only**. The public `place-call` function **never** places a live CALL-E call — even if `CALLE_API_KEY` were set and `dry_run=false`. There is no live `@call-e/calle` dial path in the public function.
 
 ### Behaviour
 
-Tool: place_tenant_call. Inspector Confirm and call writes last_call. See BUILD.md for verify steps.
+Tool: `place_tenant_call`. Inspector **Confirm fixture** writes a fixture `last_call` (masked phone). See BUILD.md for verify steps.
 
-dry_run true (default) or missing key → fixture, no network dial.
-Function missing → client fixture. Live path needs package + key + dry_run false + human confirm.
-
+- Always fixture mode (Netlify function or client fallback).
+- `confirm === true` gates the **fixture write only** (demo UX) — not a real dial.
+- Accepts **only** standards-reserved SAMPLE phones: `+15550100100`, `+15550100101`, `+61491570006`, `+61491570156`.
+- Responses mask the phone (country code + last digits; middle as `•`). Transcript stays generic (goal not echoed).
 
 ### Safety
 
-- Never auto-dials. Agent stages preview; human Confirm and call required for POST.
-- Demo later with your own phone. No secrets in the repo — set the API key in Netlify env UI only.
+- Public live URL never dials. Do not enter real phones.
+- Prefer SAMPLE `+15550100100` (NANP 555 reserved).
+- A private fork could add a gated live CALL-E path later; that is **not** this public deployment.
 
 ## Files
 

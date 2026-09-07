@@ -505,30 +505,58 @@
   }
 
 
+  /** Standards-reserved fictional / drama numbers only (NANP 555 + ACMA). */
+  const SAMPLE_PHONES = ["+15550100100", "+15550100101", "+61491570006", "+61491570156"];
+  const ALLOWED_PHONES = {};
+  SAMPLE_PHONES.forEach(function (p) { ALLOWED_PHONES[p] = true; });
+  const DEFAULT_SAMPLE_PHONE = "+15550100100";
+
+  /** Keep country code + last 4 digits; mask middle with •. Never show full E.164 in last_call UI. */
+  function maskPhone(phone) {
+    const p = String(phone || "").trim();
+    if (!p.startsWith("+") || p.length < 8) return "••••";
+    let ccLen = 2;
+    if (p.startsWith("+61") || p.startsWith("+44") || p.startsWith("+64")) ccLen = 3;
+    else if (p.startsWith("+1")) ccLen = 2;
+    else ccLen = Math.min(3, p.length - 4);
+    const last = 4;
+    const prefix = p.slice(0, ccLen);
+    const suffix = p.slice(-last);
+    const midLen = Math.max(0, p.length - ccLen - last);
+    return prefix + "•".repeat(midLen) + suffix;
+  }
+
+  function isAllowedSamplePhone(phone) {
+    return !!ALLOWED_PHONES[String(phone || "").trim()];
+  }
+
   function clientCallFixture(payload) {
     const shopId = payload.shop_id || "unknown";
-    const goal = (payload.goal || "").trim();
+    const phone = String(payload.phone || "").trim();
+    const masked = maskPhone(phone);
     const structured_result = {
       interested: "unknown",
       preferred_window: "Weekday mornings (SAMPLE)",
-      notes: "Client-side dry-run fixture for " + shopId + ". No CALL-E network call. Goal: " + (goal || "(none)") + ".",
+      notes: "Client-side honestly fake-only fixture for " + shopId + ". No CALL-E network call. Public demo never dials.",
       call_outcome: "dry_run_completed"
     };
     return {
       ok: true,
-      mode: "dry_run",
+      mode: "fixture",
       status: "completed",
       dry_run: true,
       fixture: true,
+      honestly_fake_only: true,
       fixture_source: "client",
       shop_id: shopId,
-      phone: payload.phone,
-      goal: goal,
+      phone: masked,
+      phone_masked: true,
+      goal: "(omitted from public response)",
       provider: "fixture",
       structured_result: structured_result,
       result: structured_result,
-      summary: "Dry-run completed for " + shopId + " — tenant interest unknown; preferred SAMPLE weekday mornings.",
-      transcript: "[fixture] Agent: Calling about Harbour Place " + shopId + ". " + goal + "\n[fixture] Tenant: Thanks — mornings work best."
+      summary: "Fixture completed for " + shopId + " — tenant interest unknown; preferred SAMPLE weekday mornings. No live dial.",
+      transcript: "[fixture] Agent: Calling about Harbour Place " + shopId + " leasing interest (SAMPLE).\n[fixture] Tenant: Thanks — mornings work best."
     };
   }
 
@@ -570,11 +598,26 @@
     source = source || "human";
     const shop = shopById(input.shop_id);
     if (!shop) return { ok: false, error: "Unknown shop_id", summary: "not found" };
-    const phone = String(input.phone || "").trim();
+    let phone = String(input.phone || "").trim();
     const goal = String(input.goal || "").trim();
-    if (!phone) return { ok: false, error: "phone is required (E.164 preferred)", summary: "need phone" };
+    if (!phone) phone = DEFAULT_SAMPLE_PHONE;
     if (!goal) return { ok: false, error: "goal is required", summary: "need goal" };
-    const dryRun = input.dry_run !== false;
+
+    if (!isAllowedSamplePhone(phone)) {
+      return {
+        ok: false,
+        error:
+          "Use a reserved SAMPLE number only (e.g. " +
+          DEFAULT_SAMPLE_PHONE +
+          "). Allowed: " +
+          SAMPLE_PHONES.join(", "),
+        summary: "need reserved SAMPLE phone",
+        allowed_sample_phones: SAMPLE_PHONES.slice()
+      };
+    }
+
+    // Public demo is honestly fake-only — always fixture; confirm gates the write only.
+    const dryRun = true;
 
     callDraft = {
       shop_id: shop.shop_id,
@@ -586,31 +629,27 @@
     };
     selectedId = shop.shop_id;
 
-    const confirmed = input.confirm === true || (source === "sim" && dryRun);
+    const confirmed = input.confirm === true || source === "sim";
     if (!confirmed) {
       render();
       return {
         ok: true,
         needs_confirm: true,
-        dry_run: dryRun,
+        dry_run: true,
+        honestly_fake_only: true,
         shop_id: shop.shop_id,
-        phone: phone,
+        phone: maskPhone(phone),
         goal: goal,
-        summary: "Preview staged · Confirm & call in inspector (never auto-dials)"
+        summary: "Preview staged · Confirm writes a fixture only (public demo never dials)"
       };
     }
 
-    if (!dryRun && source === "sim") {
-      callDraft.status = "blocked";
-      render();
-      return {
-        ok: false,
-        error: "Simulate agent only supports dry_run (refuses live dial)",
-        summary: "refused live dial from sim"
-      };
+    if (input.dry_run === false) {
+      // Ignore live request — public site never dials.
+      callDraft.status = "fixture_only";
     }
 
-    callDraft.status = dryRun ? "dry_running" : "calling";
+    callDraft.status = "dry_running";
     render();
 
     const payload = {
@@ -618,18 +657,24 @@
       phone: phone,
       goal: goal,
       confirm: true,
-      dry_run: dryRun
+      dry_run: true
     };
 
-    let response;
-    if (dryRun) {
-      // Try Netlify function; on 404/offline use client fixture (never dials CALL-E).
-      response = await requestPlaceCall(payload);
-      if (!response || response.ok === false) {
-        response = clientCallFixture(payload);
+    let response = await requestPlaceCall(payload);
+    if (!response || response.ok === false) {
+      // Allowlist already checked client-side; function 400 for phone should surface.
+      if (response && response.error && /SAMPLE|allowed|phone/i.test(String(response.error))) {
+        callDraft.status = "error";
+        callDraft.result = response;
+        render();
+        return {
+          ok: false,
+          error: response.error,
+          summary: response.summary || "need reserved SAMPLE phone",
+          response: response
+        };
       }
-    } else {
-      response = await requestPlaceCall(payload);
+      response = clientCallFixture(payload);
     }
 
     if (!response || response.ok === false) {
@@ -645,15 +690,18 @@
     }
 
     const structured = response.structured_result || response.result || {};
+    const maskedPhone = response.phone || maskPhone(phone);
     shop.last_call = {
       at: new Date().toISOString(),
-      phone: phone,
-      goal: goal,
-      mode: response.mode || (dryRun ? "dry_run" : "live"),
+      phone: maskedPhone,
+      phone_masked: true,
+      goal: "(omitted — fixture only)",
+      mode: "fixture",
       status: response.status || "completed",
-      dry_run: !!response.dry_run || dryRun,
-      fixture: !!response.fixture,
-      provider: response.provider || (response.fixture ? "fixture" : "call-e"),
+      dry_run: true,
+      fixture: true,
+      honestly_fake_only: true,
+      provider: "fixture",
       interested: structured.interested || "unknown",
       preferred_window: structured.preferred_window || "",
       notes: structured.notes || "",
@@ -667,13 +715,13 @@
     render();
     return {
       ok: true,
-      dry_run: shop.last_call.dry_run,
-      fixture: shop.last_call.fixture,
+      dry_run: true,
+      fixture: true,
+      honestly_fake_only: true,
       shop_id: shop.shop_id,
       last_call: shop.last_call,
       shop: publicShop(shop),
-      summary: (shop.last_call.dry_run ? "Dry-run fixture · " : "CALL-E · ") +
-        shop.shop_id + " · interested=" + shop.last_call.interested
+      summary: "Fixture · " + shop.shop_id + " · interested=" + shop.last_call.interested + " · phone=" + maskedPhone
     };
   }
 
@@ -795,16 +843,16 @@
     },
     {
       name: "place_tenant_call",
-      title: "Place tenant call",
-      description: "Prepare or place a leasing outreach call via CALL-E. Defaults to dry_run true (fixture only, no network dial). Never auto-dials: agent/tool stages a preview; human must Confirm & call (confirm:true) before POST. Simulate dry-run writes a fixture onto the shop.",
+      title: "Place tenant call (fixture)",
+      description: "Stage an honestly fake-only CALL-E-shaped fixture for tenant outreach. Public demo NEVER dials. Prefer SAMPLE phone +15550100100 (allowlisted reserved numbers only). confirm:true gates the fixture write only — not a real dial.",
       inputSchema: {
         type: "object",
         properties: {
           shop_id: { type: "string", enum: SHOP_IDS, description: "Shop code HP-01 to HP-24." },
-          phone: { type: "string", description: "E.164 phone for the call target (SAMPLE / demo numbers only)." },
-          goal: { type: "string", description: "What the call should achieve (leasing interest, preferred window)." },
-          dry_run: { type: "boolean", description: "Default true. When true, return fixture only — never dial CALL-E." },
-          confirm: { type: "boolean", description: "Must be true to place (or dry-run) the call. Without confirm, tool only stages a preview." }
+          phone: { type: "string", description: "Reserved SAMPLE E.164 only, e.g. +15550100100 (NANP 555 / ACMA drama). Others rejected." },
+          goal: { type: "string", description: "What the (fixture) call should achieve. Not echoed into public transcript." },
+          dry_run: { type: "boolean", description: "Ignored on public demo — always fixture / honestly fake-only." },
+          confirm: { type: "boolean", description: "Must be true to write the fixture. Without confirm, tool only stages a preview. Does not authorize a real dial." }
         },
         required: ["shop_id", "phone", "goal"],
         additionalProperties: false
@@ -953,7 +1001,7 @@
       if (shop.last_call) {
         const c = document.createElement("span");
         c.className = "badge" + (shop.last_call.dry_run ? "" : " applied");
-        c.textContent = shop.last_call.dry_run ? "Call dry-run" : "Called";
+        c.textContent = shop.last_call.fixture || shop.last_call.honestly_fake_only || shop.last_call.dry_run ? "Call fixture" : "Call fixture";
         c.title = "interested=" + shop.last_call.interested;
         el.appendChild(c);
       }
@@ -1055,28 +1103,28 @@
             '<div class="btn-row"><button type="button" class="btn btn-ghost" id="insp-draft">Draft on page</button></div>' +
       "</div>" +
       '<div class="call-panel" style="margin-top:10px;border-top:1px dashed var(--rule);padding-top:8px">' +
-      "<strong style='font-family:var(--font-cond);letter-spacing:.12em;text-transform:uppercase;font-size:11px'>CALL-E tenant call</strong>" +
-      "<p class='inspector-empty' style='margin:4px 0 8px'>Never auto-dials. Confirm &amp; call required. Dry-run default = fixture only.</p>" +
-      '<div class="field"><label for="insp-phone">Phone</label>' +
-      '<input id="insp-phone" type="tel" placeholder="+61…" value="' +
-      escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.phone) || (shop.last_call && shop.last_call.phone) || "") +
+      "<strong style='font-family:var(--font-cond);letter-spacing:.12em;text-transform:uppercase;font-size:11px'>CALL-E fixture (fake-only)</strong>" +
+      "<p class='inspector-empty' style='margin:4px 0 8px'>Public demo is honestly fake-only — never dials. Confirm writes a fixture. Use SAMPLE " + DEFAULT_SAMPLE_PHONE + ".</p>" +
+      '<div class="field"><label for="insp-phone">Phone (SAMPLE)</label>' +
+      '<input id="insp-phone" type="tel" placeholder="+15550100100" value="' +
+      escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.phone) || DEFAULT_SAMPLE_PHONE) +
       '"></div>' +
       '<div class="field"><label for="insp-call-goal">Goal</label>' +
       '<input id="insp-call-goal" placeholder="Confirm interest / preferred window" value="' +
-      escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.goal) || (shop.last_call && shop.last_call.goal) || "") +
+      escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.goal) || "") +
       '"></div>' +
       '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row">' +
-      '<input id="insp-dry-run" type="checkbox"' +
-      ((callDraft && callDraft.shop_id === shop.shop_id) ? (callDraft.dry_run !== false ? " checked" : "") : " checked") +
-      '> <span>dry_run (fixture; no live dial)</span></label>' +
+      '<input id="insp-dry-run" type="checkbox" checked disabled' +
+      '> <span>fixture only (public demo never dials)</span></label>' +
       '<div class="btn-row">' +
-      '<button type="button" class="btn btn-brass" id="insp-confirm-call">Confirm &amp; call</button>' +
+      '<button type="button" class="btn btn-brass" id="insp-confirm-call">Confirm fixture</button>' +
       '</div>' +
       '<p class="call-status" id="insp-call-status" style="margin:8px 0 0;font-size:12px;font-family:var(--font-mono)">' +
       escapeHtml((callDraft && callDraft.shop_id === shop.shop_id && callDraft.status) || (shop.last_call ? "last result on shop" : "idle")) +
       "</p>" +
       (shop.last_call ? '<article class="proposal call-result" style="margin-top:8px">' +
-        '<div class="pid">last_call' + (shop.last_call.dry_run ? " · dry-run" : "") + "</div>" +
+        '<div class="pid">last_call · fixture · fake-only</div>' +
+        "<div>phone: " + escapeHtml(shop.last_call.phone || "—") + "</div>" +
         "<div>interested: <strong>" + escapeHtml(shop.last_call.interested) + "</strong></div>" +
         "<div>preferred_window: " + escapeHtml(shop.last_call.preferred_window || "—") + "</div>" +
         "<div>outcome: " + escapeHtml(shop.last_call.call_outcome || "") + "</div>" +
@@ -1105,9 +1153,9 @@
         if (statusEl) statusEl.textContent = "confirming…";
         dispatch("place_tenant_call", {
           shop_id: shop.shop_id,
-          phone: document.getElementById("insp-phone").value,
+          phone: document.getElementById("insp-phone").value || DEFAULT_SAMPLE_PHONE,
           goal: document.getElementById("insp-call-goal").value || "Confirm leasing interest and preferred window",
-          dry_run: document.getElementById("insp-dry-run").checked,
+          dry_run: true,
           confirm: true
         }, "human").then(function (result) {
           if (statusEl) statusEl.textContent = result && result.summary ? result.summary : "done";
@@ -1259,11 +1307,17 @@
           '<option value="false">false</option></select></div>';
       }
       const type = spec.type === "integer" || spec.type === "number" ? "number" : "text";
+      var ph = "";
+      if (name === "place_tenant_call" && k === "phone") {
+        ph = " placeholder=\"+15550100100\" value=\"+15550100100\"";
+      } else if (name === "place_tenant_call" && k === "goal") {
+        ph = " placeholder=\"Confirm SAMPLE leasing interest\"";
+      }
       return '<div class="field"><label for="sim-' + k + '">' + k + (req ? " *" : "") +
         "</label><input id='sim-" + k + "' type='" + type + "' " +
         (spec.minimum != null ? "min='" + spec.minimum + "' " : "") +
         (spec.maximum != null ? "max='" + spec.maximum + "' " : "") +
-        "></div>";
+        ph + "></div>";
     }).join("");
   }
 

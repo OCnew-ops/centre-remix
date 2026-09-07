@@ -1,8 +1,17 @@
 /**
- * Centre Remix — CALL-E place-call (Netlify Function)
+ * Centre Remix — CALL-E place-call (Netlify Function) — PUBLIC DEMO
+ *
+ * Honestly fake-only / dry-run fixtures. This PUBLIC function NEVER places a
+ * live CALL-E call, even if CALLE_API_KEY is set and dry_run=false.
+ * The live @call-e/calle createAndWait path is removed from this function.
+ *
  * POST JSON: { shop_id, phone, goal, confirm: true, dry_run?: boolean }
- * Rejects unless confirm === true. Fixture when no key or dry_run !== false.
- * Live path: @call-e/calle CalleClient.calls.createAndWait (AU / en-AU).
+ * - confirm === true gates the fixture write only (demo UX) — not a real dial.
+ * - Accepts ONLY standards-reserved fictional phones (allowlist).
+ * - Responses MASK the phone (never return full E.164).
+ * - Transcript stays generic (does not echo goal / possible PII).
+ *
+ * OPTIONS + POST only. CORS enabled for browser demo.
  */
 
 const RESULT_SCHEMA = {
@@ -17,58 +26,86 @@ const RESULT_SCHEMA = {
   }
 };
 
-const E164_RE = /^\+[1-9]\d{7,14}$/;
+/** Standards-reserved fictional / drama numbers only (NANP 555 + ACMA). */
+const ALLOWED_PHONES = new Set([
+  "+15550100100",
+  "+15550100101",
+  "+61491570006",
+  "+61491570156"
+]);
+
+const CORS_HEADERS = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS"
+};
 
 function json(statusCode, body) {
   return {
     statusCode,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "POST, OPTIONS"
-    },
+    headers: CORS_HEADERS,
     body: JSON.stringify(body)
   };
 }
 
+/**
+ * Keep country code + last 4 digits; mask the middle with •.
+ * Never returns the full E.164 in responses.
+ */
+function maskPhone(phone) {
+  const p = String(phone || "").trim();
+  if (!p.startsWith("+") || p.length < 8) return "••••";
+  let ccLen = 2;
+  if (p.startsWith("+61") || p.startsWith("+44") || p.startsWith("+64")) ccLen = 3;
+  else if (p.startsWith("+1")) ccLen = 2;
+  else ccLen = Math.min(3, p.length - 4);
+  const last = 4;
+  const prefix = p.slice(0, ccLen);
+  const suffix = p.slice(-last);
+  const midLen = Math.max(0, p.length - ccLen - last);
+  return prefix + "•".repeat(midLen) + suffix;
+}
+
 function buildFixture(body) {
   const shopId = String(body.shop_id || "").trim();
-  const goal = String(body.goal || "").trim();
   const phone = String(body.phone || "").trim();
+  const masked = maskPhone(phone);
   const structured_result = {
     interested: "unknown",
     preferred_window: "Weekday mornings (SAMPLE)",
     notes:
-      "Dry-run fixture for " +
+      "Honestly fake-only fixture for " +
       shopId +
-      ". No CALL-E network call was made. Goal was: " +
-      (goal || "(none)") +
-      ".",
+      ". No CALL-E network call was made. Public Netlify function never dials.",
     call_outcome: "dry_run_completed"
   };
   return {
     ok: true,
-    mode: "dry_run",
+    mode: "fixture",
     status: "completed",
     dry_run: true,
     fixture: true,
+    honestly_fake_only: true,
     shop_id: shopId,
-    phone: phone,
-    goal: goal,
+    phone: masked,
+    phone_masked: true,
+    // Goal accepted for demo UX but not echoed (may contain PII).
+    goal: "(omitted from public response)",
     provider: "fixture",
     structured_result: structured_result,
     summary:
-      "Dry-run completed for " +
+      "Fixture completed for " +
       shopId +
-      " — tenant interest unknown; preferred SAMPLE weekday mornings.",
+      " — tenant interest unknown; preferred SAMPLE weekday mornings. No live dial.",
     transcript:
       "[fixture] Agent: Calling about Harbour Place " +
       shopId +
-      ". " +
-      goal +
-      "\n[fixture] Tenant: Thanks — please send details; mornings work best.",
-    resultSchema: RESULT_SCHEMA
+      " leasing interest (SAMPLE).\n" +
+      "[fixture] Tenant: Thanks — please send details; mornings work best.",
+    resultSchema: RESULT_SCHEMA,
+    note:
+      "confirm gates this fixture write only. Public demo never places a live CALL-E call."
   };
 }
 
@@ -87,10 +124,11 @@ exports.handler = async function (event) {
     return json(400, { ok: false, error: "Invalid JSON body" });
   }
 
+  // confirm gates fixture write (demo UX) — never a real dial.
   if (body.confirm !== true) {
     return json(400, {
       ok: false,
-      error: "confirm must be true — never auto-dial",
+      error: "confirm must be true — gates fixture write only (public demo never dials)",
       summary: "need confirm"
     });
   }
@@ -107,87 +145,18 @@ exports.handler = async function (event) {
     });
   }
 
-  if (!E164_RE.test(phone)) {
+  if (!ALLOWED_PHONES.has(phone)) {
     return json(400, {
       ok: false,
-      error: "phone must be E.164-ish (+country and 8-15 digits total)",
-      summary: "bad phone"
-    });
-  }
-
-  const dryRun = body.dry_run !== false;
-  const apiKey = process.env.CALLE_API_KEY;
-
-  if (!apiKey || dryRun) {
-    return json(200, buildFixture({ shop_id: shopId, phone: phone, goal: goal }));
-  }
-
-  // Live path needs @call-e/calle installed (see package.json).
-  let CalleClient;
-  try {
-    CalleClient = require("@call-e/calle").CalleClient;
-  } catch (err) {
-    return json(500, {
-      ok: false,
       error:
-        "Live CALL-E path needs the @call-e/calle package installed for this function.",
-      summary: "package missing"
+        "phone must be a standards-reserved SAMPLE number. Allowed: " +
+        Array.from(ALLOWED_PHONES).join(", "),
+      summary: "use reserved SAMPLE phone",
+      allowed_sample_phones: Array.from(ALLOWED_PHONES)
     });
   }
 
-  try {
-    const client = new CalleClient({ apiKey: apiKey });
-    const task =
-      "Call " +
-      phone +
-      " about Harbour Place shop " +
-      shopId +
-      ". Goal: " +
-      goal +
-      ". Ask whether they are interested in a leasing conversation, and if so a preferred contact window.";
-
-    const call = await client.calls.createAndWait({
-      task: task,
-      recipient: {
-        phone: phone,
-        region: "AU",
-        locale: "en-AU"
-      },
-      resultSchema: RESULT_SCHEMA
-    });
-
-    const structured =
-      (call && (call.structuredResult || call.structured_result)) || {};
-
-    return json(200, {
-      ok: true,
-      mode: "live",
-      status: (call && call.status) || "completed",
-      dry_run: false,
-      fixture: false,
-      shop_id: shopId,
-      phone: phone,
-      goal: goal,
-      provider: "call-e",
-      structured_result: {
-        interested: structured.interested || "unknown",
-        preferred_window: structured.preferred_window || "",
-        notes: structured.notes || "",
-        call_outcome:
-          structured.call_outcome ||
-          (call && call.status) ||
-          "completed"
-      },
-      summary:
-        (call && (call.summary || call.shortSummary)) ||
-        ("CALL-E call finished for " + shopId),
-      transcript: (call && (call.transcript || call.transcriptText)) || ""
-    });
-  } catch (err) {
-    return json(502, {
-      ok: false,
-      error: String(err && err.message ? err.message : err),
-      summary: "CALL-E live call failed"
-    });
-  }
+  // Always fixture — ignore CALLE_API_KEY and dry_run for dialing.
+  // Live @call-e/calle path intentionally absent from this public function.
+  return json(200, buildFixture({ shop_id: shopId, phone: phone, goal: goal }));
 };

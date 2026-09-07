@@ -1,16 +1,16 @@
-# Centre Remix — CALL-E dry-run wrap (build notes)
+# Centre Remix — CALL-E honestly fake-only wrap (build notes)
 
-Scaffold finished 5 Sep 2026 (Australia/Sydney). Path: /workspace/centre-remix. Do not re-clone. Do not push unless asked.
+Scaffold path: /workspace/centre-remix. Public demo never dials.
 
 ## Files
 
-- netlify/functions/place-call.js — OPTIONS CORS, confirm gate, E.164-ish phone, dry-run fixture, optional live path
-- package.json — centre-remix + CALL-E SDK dependency
+- netlify/functions/place-call.js — OPTIONS CORS, confirm gates fixture write only, allowlisted SAMPLE phones, masked phone in JSON, generic transcript. **No live @call-e/calle path.**
+- package.json — centre-remix (SDK optional for private forks only; public function does not dial)
 - netlify.toml — functions = netlify/functions
-- js/app.js — place_tenant_call tool, inspector CALL panel, Simulate agent, client fixture fallback
+- js/app.js — place_tenant_call tool, inspector CALL panel, Simulate agent, client fixture fallback, phone mask
 - index.html — eleven tools banner copy
 - css/app.css — call panel tweaks
-- README.md — CALL-E section
+- README.md — honestly fake-only CALL-E section
 - BUILD.md — this file
 
 ## Verify
@@ -20,19 +20,16 @@ node --check netlify/functions/place-call.js
 node --check js/app.js
 rg place_tenant_call js/app.js
 rg "eleven tools|11 tools" index.html js/app.js README.md
+rg "honestly fake-only|15550100100" README.md netlify/functions/place-call.js js/app.js
 python3 -m http.server 8765
 ```
 
-Manual: HP-09 inspector CALL-E panel, phone +15550100100, dry_run on, Confirm and call. Expect last_call + activity log. No live dial.
+Manual: HP-09 inspector CALL panel, phone `+15550100100`, Confirm fixture. Expect masked last_call + activity log. No live dial.
 
 ## Gaps
 
-- Live SDK not exercised against a real account in this dry-run scaffold.
+- Public deployment is fixture-only by design (Ray-56).
 - Static http.server uses client fixture (function 404).
-- Keep dry_run true for demos.
+- Live dials are out of scope for this public URL (private fork only, if ever).
 
-Status: CALL-E dry-run scaffold complete (function + place_tenant_call UI); verified node --check + rg; no push, no live dials.
-
-## Push / PR later
-
-Branch e.g. calle-dry-run-wrap, add the files above, commit with no secrets, push and open PR when remote is ready.
+Status: honestly fake-only public wrap complete; verified node --check + rg; no live dials.
