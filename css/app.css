@@ -887,3 +887,17 @@ button {
     justify-content: flex-start;
   }
 }
+
+
+/* —— CALL-E confirm panel —— */
+.call-panel input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+.call-result {
+  background: var(--paper-2);
+  border-color: var(--brass);
+}
+.badge + .badge {
+  margin-left: 4px;
+}

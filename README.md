@@ -12,7 +12,7 @@ Copyright (c) 2026 Joseph Kalk. MIT License.
 
 WebMCP lets the page register real actions with `document.modelContext.registerTool`. The agent does not get a chatbot bolted onto a brochure. It gets the same board the human is looking at: filter the tenancy schedule, highlight a shop on the plan, drop an uncommitted remix overlay, draft a note that never leaves the page.
 
-Tools run in this tab. There is no backend, no API key, and no login. If the human rejects a proposal, it never hits the sitting tenant.
+Tools run in this tab. The board itself needs no login. Optional CALL-E dry-run uses a Netlify Function; without it the client fixture still works offline. If the human rejects a proposal, it never hits the sitting tenant.
 
 ## Humans vs agents
 
@@ -23,6 +23,7 @@ Tools run in this tab. There is no backend, no API key, and no login. If the hum
 | Mix | Category bars and gap notes | `summarise_mix` |
 | Remix | Propose from the inspector, Accept or Reject on the overlay | `propose_remix`, `apply_remix`, `reject_remix` |
 | Letters | Draft outreach panel (copy only) | `draft_outreach` (does not send email) |
+| Tenant call | Confirm UI in inspector (dry-run default) | `place_tenant_call` (never auto-dials) |
 | Undo | Undo last applied | `undo_last` |
 
 The Simulate agent panel in the sidebar calls the same JavaScript functions the WebMCP tools call, so a judge can demo the product without ChatGPT.
@@ -41,7 +42,7 @@ No iframes. Top-level page only. No FLNT, LeaseInfo, Accurait, or real retailers
 
 Vanilla HTML, CSS, and JavaScript. Sample centre lives in `data/harbour-place.json` and is also embedded so `index.html` still opens from disk.
 
-Ten tools, snake_case names, narrow JSON Schema, `additionalProperties: false`. Each `execute` handler mutates or queries the live UI and returns:
+Eleven tools, snake_case names, narrow JSON Schema, `additionalProperties: false`. Each `execute` handler mutates or queries the live UI and returns:
 
 ```json
 { "content": [{ "type": "text", "text": "<json result>" }] }
@@ -56,6 +57,7 @@ Ten tools, snake_case names, narrow JSON Schema, `additionalProperties: false`. 
 | `apply_remix` | Commit by `proposal_id`. |
 | `reject_remix` | Drop overlay by `proposal_id`. |
 | `draft_outreach` | On-page letter for `landlord` or `tenant`. Never sends. |
+| `place_tenant_call` | Stage or dry-run a CALL-E leasing call. Default dry_run true. Never auto-dials; human Confirm and call. |
 | `set_expiry_window` | Visual filter by months (0 clears). |
 | `summarise_mix` | Mix, expiries, gaps. `readOnlyHint`. |
 | `undo_last` | Revert the last applied remix. |
@@ -80,7 +82,7 @@ Or double-click `index.html`. The embedded sample data loads if `fetch` of the J
 1. ChatGPT desktop in-app browser, **or**
 2. Chrome 149+ with `chrome://flags/#enable-webmcp-testing` enabled, then reload.
 
-You should see the green **WebMCP live** banner and ten registered tools.
+You should see the green **WebMCP live** banner and eleven registered tools.
 
 ## Judge test steps
 
@@ -92,7 +94,8 @@ You should see the green **WebMCP live** banner and ten registered tools.
 6. Click **Undo last applied**. Confirm the previous tenant returns and the overlay is pending again.
 7. In **Simulate agent**, run `summarise_mix`, then `set_expiry_window` with `months` set to 6, then `list_tenants` with `category` set to fashion. Confirm the plan dims and the activity log records `sim` rows.
 8. Run `draft_outreach` for HP-09, audience `landlord`. Confirm a letter appears on the page and nothing is posted anywhere.
-9. In a WebMCP-capable browser, confirm the banner turns live and an agent can call the same ten tools against the live UI.
+9. In **Simulate agent**, run `place_tenant_call` for HP-09 with a SAMPLE phone and goal (leave dry_run true). Confirm a fixture last_call on the shop and an activity log row, with no live dial.
+10. In a WebMCP-capable browser, confirm the banner turns live and an agent can call the same eleven tools against the live UI.
 
 ## Five example agent prompts
 
@@ -101,6 +104,24 @@ You should see the green **WebMCP live** banner and ten registered tools.
 3. "Propose replacing HP-09 with a health tenancy. Rationale: fashion is already heavy, this shop is band D, and the lease ends October 2026. Do not apply it until I say so."
 4. "Draft landlord outreach asking the Trust to accept that overlay. Keep it on the page. Do not send email."
 5. "Summarise the category mix, set the expiry window to 12 months, and list F&B shops in the high rent band."
+
+
+## CALL-E (dry-run wrap)
+
+Outbound tenant calls go through a thin Netlify Function wrap around CALL-E. **Dry-run is the default.** Nothing dials unless a human confirms and `dry_run` is explicitly `false` with the API key set on Netlify.
+
+### Behaviour
+
+Tool: place_tenant_call. Inspector Confirm and call writes last_call. See BUILD.md for verify steps.
+
+dry_run true (default) or missing key → fixture, no network dial.
+Function missing → client fixture. Live path needs package + key + dry_run false + human confirm.
+
+
+### Safety
+
+- Never auto-dials. Agent stages preview; human Confirm and call required for POST.
+- Demo later with your own phone. No secrets in the repo — set the API key in Netlify env UI only.
 
 ## Files
 
@@ -111,8 +132,12 @@ centre-remix/
   js/app.js
   js/data.js          embedded SAMPLE copy for file://
   data/harbour-place.json
+  netlify/functions/place-call.js
+  netlify.toml
+  package.json
   LICENSE
   README.md
+  BUILD.md
 ```
 
 Built for OpenAI's WebMCP Challenge. Fictional Harbour Place only.
